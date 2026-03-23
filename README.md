@@ -20,9 +20,8 @@ python populate.py
 The script will:
 1. Open a Chromium browser and navigate to the EWE login page
 2. Auto-fill your username and password, then pause for you to solve the image CAPTCHA
-3. After login, read orders from **Sheet3** of `input.xlsx` and show a preview of each order in the terminal
-4. Press **Enter** to fill the form fields in the browser, or **Ctrl+C** to stop
-5. Press **Enter** again to submit, or **Ctrl+C** to skip to the next order
+3. After login, all orders from **Sheet3** of `input.xlsx` are filled and submitted automatically — no further interaction needed
+4. Each order preview is printed to the terminal as it is processed
 
 ## Input format
 
@@ -46,4 +45,3 @@ The three address fields are pasted into the smart address textarea, which auto-
 | `EWE_USERNAME` | — | Login username |
 | `EWE_PASSWORD` | — | Login password |
 | `SERVICE_LINE` | `经济杂货` | Service line: `经济奶粉`, `经济杂货`, or `标准杂货` |
-# form_populator
