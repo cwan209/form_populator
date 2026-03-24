@@ -1,4 +1,7 @@
+import glob
+import math
 import os
+import sys
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -9,12 +12,24 @@ load_dotenv()
 EWE_USERNAME = os.getenv("EWE_USERNAME", "")
 EWE_PASSWORD = os.getenv("EWE_PASSWORD", "")
 SERVICE_LINE = os.getenv("SERVICE_LINE", "经济杂货")
+CONFIRM_EACH_ORDER = os.getenv("CONFIRM_EACH_ORDER", "false").lower() == "true"
 EWE_URL = "https://jerry.ewe.com.au/eweJerry/ewe/order/orderInto"
 
 SERVICE_LINE_VALUES = {
     "经济奶粉": "ecnMilkpower",
     "经济杂货": "ecnGoods",
     "标准杂货": "standGoods",
+}
+
+# Max quantity per line item for each category (keyed by filename stem)
+CATEGORY_MAX_QTY = {
+    "保健品": 8,
+    "零食": 15,
+}
+
+# Override service line per category (keyed by filename stem)
+CATEGORY_SERVICE_LINE = {
+    "奶粉": "经济奶粉",
 }
 
 
@@ -39,7 +54,11 @@ def login(page):
     page.fill('#j_username', EWE_USERNAME)
     page.fill('#j_password', EWE_PASSWORD)
     print("CAPTCHA required — solve it in the browser, then press Enter here...")
-    input()
+    try:
+        input()
+    except EOFError:
+        print("(no stdin — waiting 30s for CAPTCHA to be solved manually...)")
+        import time; time.sleep(30)
     # Login button is input[type=submit], not a <button>
     for sel in ['input[type=submit]', 'input[value="登录"]', 'button:has-text("登录")', 'button[type=submit]']:
         btn = page.locator(sel)
@@ -55,7 +74,21 @@ def login(page):
     print("Logged in.")
 
 
-def fill_order(page, name, phone, address, items, notes):
+def split_items(items, max_qty):
+    """Split items exceeding max_qty into evenly distributed rows."""
+    result = []
+    for brand, item_name, qty in items:
+        if qty <= max_qty:
+            result.append((brand, item_name, qty))
+        else:
+            n = math.ceil(qty / max_qty)
+            base, remainder = divmod(qty, n)
+            for i in range(n):
+                result.append((brand, item_name, base + (1 if i < remainder else 0)))
+    return result
+
+
+def fill_order(page, name, phone, address, items, notes, max_qty=None, category=None):
     # Navigate to fresh form
     page.goto(EWE_URL)
     page.wait_for_load_state('networkidle')
@@ -72,6 +105,10 @@ def fill_order(page, name, phone, address, items, notes):
     except Exception:
         print("  Warning: address geocoding may not have completed — check browser.")
 
+    # Split items exceeding max qty before filling
+    if max_qty:
+        items = split_items(items, max_qty)
+
     # Fill items table
     # Table has 7 inputs per row: sku(0), brand(1), productName(2), number(3),
     #   monovalent(4), barCode(5), deleteBtn(6)
@@ -84,13 +121,17 @@ def fill_order(page, name, phone, address, items, notes):
         page.locator(f'#productName{i}').fill(item_name)
         page.locator(f'#number{i}').fill(str(qty))
 
-    # Select service line radio by value attribute
-    radio_value = SERVICE_LINE_VALUES.get(SERVICE_LINE, "ecnGoods")
+    # Select service line radio by value attribute (category overrides .env)
+    service_line = CATEGORY_SERVICE_LINE.get(category, SERVICE_LINE) if category else SERVICE_LINE
+    radio_value = SERVICE_LINE_VALUES.get(service_line, "ecnGoods")
     page.locator(f'input[name="serviceProduction"][value="{radio_value}"]').check()
 
-    # Fill notes
+    # Fill notes: total quantity, then actual note on a new line if present
+    total_qty = sum(qty for _, _, qty in items)
+    note_text = f"{total_qty}个"
     if notes:
-        page.locator('#commentRemark').fill(notes)
+        note_text += f"\n\n{notes}"
+    page.locator('#commentRemark').fill(note_text)
 
 
 def load_orders(df):
@@ -101,7 +142,7 @@ def load_orders(df):
         name = str_cell(first.get('联系人（务必实名）', ''))
         phone = str_cell(first.get('联系电话', ''))
         address = str_cell(first.get('地址', ''))
-        notes = str_cell(first.get('买家备注', ''))
+        notes = str_cell(first.get('备注', ''))
 
         items = []
         for _, row in group.iterrows():
@@ -119,9 +160,23 @@ def load_orders(df):
 
 
 def main():
-    df = pd.read_excel('input.xlsx', sheet_name='Sheet3')
-    orders = load_orders(df)
-    print(f"Loaded {len(orders)} orders from Sheet3.\n")
+    files = sys.argv[1:] or sorted(glob.glob('input/*.xlsx'))
+    if not files:
+        print("No xlsx files found.")
+        return
+
+    orders = []
+    for f in files:
+        category = os.path.splitext(os.path.basename(f))[0]
+        max_qty = CATEGORY_MAX_QTY.get(category)
+        df = pd.read_excel(f, sheet_name='Sheet3')
+        file_orders = load_orders(df)
+        for o in file_orders:
+            o['max_qty'] = max_qty
+            o['category'] = category
+        print(f"Loaded {len(file_orders)} orders from {f} (category: {category}, max qty/item: {max_qty or 'unlimited'})")
+        orders.extend(file_orders)
+    print(f"Total: {len(orders)} orders.\n")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -135,9 +190,11 @@ def main():
             address = order['address']
             items = order['items']
             notes = order['notes']
+            max_qty = order['max_qty']
+            category = order['category']
 
             print(f"\n{'='*60}")
-            print(f"Order {idx + 1}/{len(orders)}")
+            print(f"Order {idx + 1}/{len(orders)} [{category}]")
             print(f"  Name:    {name}")
             print(f"  Phone:   {phone}")
             print(f"  Address: {address}")
@@ -148,7 +205,14 @@ def main():
                 print(f"  Notes:   {notes}")
             print(f"{'='*60}")
 
-            fill_order(page, name, phone, address, items, notes)
+            fill_order(page, name, phone, address, items, notes, max_qty, category)
+
+            if CONFIRM_EACH_ORDER:
+                try:
+                    input("Press Enter to SUBMIT this order, Ctrl+C to skip... ")
+                except KeyboardInterrupt:
+                    print("\nSkipped.")
+                    continue
 
             # Submit via the AJAX button
             page.locator('#ajaxScuuceeBtn').click()
