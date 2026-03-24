@@ -1,10 +1,18 @@
-import math
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from populate import load_orders, split_items, str_cell
+from populate import load_orders, split_order, str_cell
+
+
+def make_order(items, max_qty=None, notes=""):
+    return {
+        'name': '王芳', 'phone': '13800000001',
+        'address': '广东省深圳市某街道',
+        'items': items, 'notes': notes,
+        'max_qty': max_qty, 'category': '零食',
+    }
 
 
 class TestStrCell(unittest.TestCase):
@@ -27,55 +35,88 @@ class TestStrCell(unittest.TestCase):
         self.assertEqual(str_cell(42), "42")
 
 
-class TestSplitItems(unittest.TestCase):
+class TestSplitOrder(unittest.TestCase):
     def test_no_split_needed(self):
-        items = [("Swisse", "鱼油", 5)]
-        self.assertEqual(split_items(items, 8), [("Swisse", "鱼油", 5)])
+        order = make_order([("Swisse", "鱼油", 5)], max_qty=8)
+        result = split_order(order, 8)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['items'], [("Swisse", "鱼油", 5)])
 
-    def test_exact_max(self):
-        items = [("Swisse", "鱼油", 8)]
-        self.assertEqual(split_items(items, 8), [("Swisse", "鱼油", 8)])
+    def test_exact_max_no_split(self):
+        order = make_order([("Swisse", "鱼油", 8)], max_qty=8)
+        result = split_order(order, 8)
+        self.assertEqual(len(result), 1)
 
-    def test_even_split(self):
-        # 24 / max 15 → 2 batches of 12
-        items = [("Weet-Bix", "儿童麦片", 24)]
-        result = split_items(items, 15)
-        self.assertEqual(result, [("Weet-Bix", "儿童麦片", 12), ("Weet-Bix", "儿童麦片", 12)])
+    def test_no_max_qty_no_split(self):
+        order = make_order([("Swisse", "鱼油", 100)], max_qty=None)
+        result = split_order(order, None)
+        self.assertEqual(len(result), 1)
 
-    def test_uneven_split(self):
-        # 25 / max 15 → 2 batches: 13 + 12
-        items = [("Weet-Bix", "儿童麦片", 25)]
-        result = split_items(items, 15)
+    def test_single_item_even_split(self):
+        # qty=24, max=15 → 2 orders of 12
+        order = make_order([("Weet-Bix", "儿童麦片", 24)], max_qty=15)
+        result = split_order(order, 15)
         self.assertEqual(len(result), 2)
-        self.assertEqual(sum(q for _, _, q in result), 25)
-        self.assertAlmostEqual(result[0][2], result[1][2], delta=1)
+        self.assertEqual(result[0]['items'], [("Weet-Bix", "儿童麦片", 12)])
+        self.assertEqual(result[1]['items'], [("Weet-Bix", "儿童麦片", 12)])
 
-    def test_three_way_split(self):
-        # 31 / max 15 → 3 batches, total preserved
-        items = [("Brand", "Item", 31)]
-        result = split_items(items, 15)
+    def test_single_item_uneven_split(self):
+        # qty=25, max=15 → 2 orders: 13 + 12
+        order = make_order([("Weet-Bix", "儿童麦片", 25)], max_qty=15)
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 2)
+        qtys = [o['items'][0][2] for o in result]
+        self.assertEqual(sum(qtys), 25)
+        self.assertLessEqual(max(qtys) - min(qtys), 1)
+
+    def test_single_item_three_way_split(self):
+        # qty=31, max=15 → 3 orders
+        order = make_order([("Brand", "Item", 31)], max_qty=15)
+        result = split_order(order, 15)
         self.assertEqual(len(result), 3)
-        self.assertEqual(sum(q for _, _, q in result), 31)
-        for _, _, q in result:
-            self.assertLessEqual(q, 15)
+        self.assertEqual(sum(o['items'][0][2] for o in result), 31)
+        for o in result:
+            self.assertLessEqual(o['items'][0][2], 15)
 
-    def test_quantities_spread_evenly(self):
-        # No batch should differ from another by more than 1
+    def test_spread_evenly_all_quantities(self):
         for qty in range(1, 50):
             for max_qty in [8, 15]:
-                items = [("B", "N", qty)]
-                result = split_items(items, max_qty)
-                qtys = [q for _, _, q in result]
+                order = make_order([("B", "N", qty)], max_qty=max_qty)
+                result = split_order(order, max_qty)
+                qtys = [o['items'][0][2] for o in result]
                 self.assertEqual(sum(qtys), qty)
                 self.assertLessEqual(max(qtys) - min(qtys), 1)
 
-    def test_multiple_items_mixed(self):
-        items = [("A", "under", 5), ("B", "over", 20)]
-        result = split_items(items, 15)
-        # First item unchanged, second split into 2
-        self.assertEqual(result[0], ("A", "under", 5))
-        self.assertEqual(len([r for r in result if r[0] == "B"]), 2)
-        self.assertEqual(sum(q for b, _, q in result if b == "B"), 20)
+    def test_multiple_items_item_exceeding_goes_to_next_order(self):
+        # Item A qty=24, max=15 → 2 batches [12, 12]
+        # Item B qty=5,  max=15 → 1 batch  [5]
+        # → Order 1: A(12), B(5)  |  Order 2: A(12)
+        order = make_order([("A", "麦片", 24), ("B", "饼干", 5)], max_qty=15)
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]['items'], [("A", "麦片", 12), ("B", "饼干", 5)])
+        self.assertEqual(result[1]['items'], [("A", "麦片", 12)])
+
+    def test_multiple_items_both_exceeding(self):
+        # Item A qty=24, max=15 → [12, 12]
+        # Item B qty=30, max=15 → [15, 15]
+        # → 2 orders, each with both items
+        order = make_order([("A", "麦片", 24), ("B", "饼干", 30)], max_qty=15)
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result[0]['items']), 2)
+        self.assertEqual(len(result[1]['items']), 2)
+        total_a = sum(o['items'][0][2] for o in result)
+        total_b = sum(o['items'][1][2] for o in result)
+        self.assertEqual(total_a, 24)
+        self.assertEqual(total_b, 30)
+
+    def test_preserves_order_metadata(self):
+        order = make_order([("A", "麦片", 24)], max_qty=15, notes="请轻放")
+        result = split_order(order, 15)
+        for o in result:
+            self.assertEqual(o['name'], '王芳')
+            self.assertEqual(o['notes'], '请轻放')
 
 
 class TestLoadOrders(unittest.TestCase):

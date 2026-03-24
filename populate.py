@@ -74,21 +74,45 @@ def login(page):
     print("Logged in.")
 
 
-def split_items(items, max_qty):
-    """Split items exceeding max_qty into evenly distributed rows."""
-    result = []
-    for brand, item_name, qty in items:
+def split_order(order, max_qty):
+    """Split one order into multiple orders if any item exceeds max_qty.
+
+    Each item is divided into evenly-sized batches. The number of sub-orders
+    equals the maximum number of batches needed by any single item. Items that
+    don't need splitting are included in the first sub-order only.
+
+    Example (max_qty=15):
+      Item A qty=24 → [12, 12]
+      Item B qty=5  → [5]
+      → Sub-order 1: A(12), B(5)
+      → Sub-order 2: A(12)
+    """
+    if not max_qty:
+        return [order]
+
+    # Build per-item batch lists
+    item_batches = []
+    for brand, item_name, qty in order['items']:
         if qty <= max_qty:
-            result.append((brand, item_name, qty))
+            item_batches.append([(brand, item_name, qty)])
         else:
             n = math.ceil(qty / max_qty)
             base, remainder = divmod(qty, n)
-            for i in range(n):
-                result.append((brand, item_name, base + (1 if i < remainder else 0)))
-    return result
+            item_batches.append([
+                (brand, item_name, base + (1 if i < remainder else 0))
+                for i in range(n)
+            ])
+
+    n_orders = max(len(b) for b in item_batches)
+    sub_orders = []
+    for i in range(n_orders):
+        sub_items = [batches[i] for batches in item_batches if i < len(batches)]
+        if sub_items:
+            sub_orders.append({**order, 'items': sub_items})
+    return sub_orders
 
 
-def fill_order(page, name, phone, address, items, notes, max_qty=None, category=None):
+def fill_order(page, name, phone, address, items, notes, category=None):
     # Navigate to fresh form
     page.goto(EWE_URL)
     page.wait_for_load_state('networkidle')
@@ -104,10 +128,6 @@ def fill_order(page, name, phone, address, items, notes, max_qty=None, category=
         page.wait_for_function("document.getElementById('shi').value !== ''", timeout=8000)
     except Exception:
         print("  Warning: address geocoding may not have completed — check browser.")
-
-    # Split items exceeding max qty before filling
-    if max_qty:
-        items = split_items(items, max_qty)
 
     # Fill items table
     # Table has 7 inputs per row: sku(0), brand(1), productName(2), number(3),
@@ -176,6 +196,10 @@ def main():
             o['category'] = category
         print(f"Loaded {len(file_orders)} orders from {f} (category: {category}, max qty/item: {max_qty or 'unlimited'})")
         orders.extend(file_orders)
+    expanded = []
+    for o in orders:
+        expanded.extend(split_order(o, o['max_qty']))
+    orders = expanded
     print(f"Total: {len(orders)} orders.\n")
 
     with sync_playwright() as p:
@@ -205,7 +229,7 @@ def main():
                 print(f"  Notes:   {notes}")
             print(f"{'='*60}")
 
-            fill_order(page, name, phone, address, items, notes, max_qty, category)
+            fill_order(page, name, phone, address, items, notes, category)
 
             if CONFIRM_EACH_ORDER:
                 try:
