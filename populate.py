@@ -139,16 +139,19 @@ def fill_order(page, name, phone, address, items, notes, category=None):
         print("Session expired — log in again in the browser, then press Enter...")
         input()
 
-    # Fill smart address textarea and trigger JS parsing + Baidu geocoding
-    page.locator('#address_content').fill(f"{name} {phone} {address}")
+    # 1. Fill address into smart address textarea and trigger geocoding
+    page.locator('#address_content').fill(address)
     page.locator('input[onclick="readAddressContent()"]').click()
-    # Wait for geocoding AJAX to populate city field
     try:
         page.wait_for_function("document.getElementById('shi').value !== ''", timeout=8000)
     except Exception:
         print("  Warning: address geocoding may not have completed — check browser.")
 
-    # Fill items table
+    # 2. Fill recipient name and phone into their own fields
+    page.locator('#recieverName').fill(name)
+    page.locator('#recieverMobile').fill(phone)
+
+    # 3. Fill items table
     # Table has 7 inputs per row: sku(0), brand(1), productName(2), number(3),
     #   monovalent(4), barCode(5), deleteBtn(6)
     # IDs follow pattern: brand0, productName0, number0, brand1, productName1, ...
