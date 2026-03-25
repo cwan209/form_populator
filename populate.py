@@ -75,40 +75,58 @@ def login(page):
 
 
 def split_order(order, max_qty):
-    """Split one order into multiple orders if any item exceeds max_qty.
+    """Split an order into multiple orders if total quantity exceeds max_qty.
 
-    Each item is divided into evenly-sized batches. The number of sub-orders
-    equals the maximum number of batches needed by any single item. Items that
-    don't need splitting are included in the first sub-order only.
+    The total quantity across all items is checked. If it exceeds max_qty,
+    the order is split into ceil(total/max_qty) sub-orders with quantities
+    distributed as evenly as possible.
 
     Example (max_qty=15):
-      Item A qty=24 → [12, 12]
-      Item B qty=5  → [5]
-      → Sub-order 1: A(12), B(5)
-      → Sub-order 2: A(12)
+      A(10), B(8), C(6) → total=24, 2 sub-orders of 12
+      → Sub-order 1: A(10), B(2)
+      → Sub-order 2: B(6), C(6)
     """
     if not max_qty:
         return [order]
 
-    # Build per-item batch lists
-    item_batches = []
-    for brand, item_name, qty in order['items']:
-        if qty <= max_qty:
-            item_batches.append([(brand, item_name, qty)])
-        else:
-            n = math.ceil(qty / max_qty)
-            base, remainder = divmod(qty, n)
-            item_batches.append([
-                (brand, item_name, base + (1 if i < remainder else 0))
-                for i in range(n)
-            ])
+    items = order['items']
+    total_qty = sum(qty for _, _, qty in items)
 
-    n_orders = max(len(b) for b in item_batches)
-    sub_orders = []
+    if total_qty <= max_qty:
+        return [order]
+
+    n_orders = math.ceil(total_qty / max_qty)
+
+    # Expand items into individual units, then split into even chunks
+    flat = []
+    for brand, item_name, qty in items:
+        flat.extend([(brand, item_name)] * qty)
+
+    base, remainder = divmod(len(flat), n_orders)
+    chunks = []
+    start = 0
     for i in range(n_orders):
-        sub_items = [batches[i] for batches in item_batches if i < len(batches)]
+        size = base + (1 if i < remainder else 0)
+        chunks.append(flat[start:start + size])
+        start += size
+
+    # Re-aggregate each chunk back into (brand, name, qty) tuples
+    sub_orders = []
+    for idx, chunk in enumerate(chunks):
+        seen = {}
+        sub_items = []
+        for brand, item_name in chunk:
+            key = (brand, item_name)
+            if key in seen:
+                b, n, q = sub_items[seen[key]]
+                sub_items[seen[key]] = (b, n, q + 1)
+            else:
+                seen[key] = len(sub_items)
+                sub_items.append((brand, item_name, 1))
         if sub_items:
-            sub_orders.append({**order, 'items': sub_items})
+            sub_orders.append({**order, 'items': sub_items,
+                               'split_part': idx + 1, 'split_total': n_orders})
+
     return sub_orders
 
 
@@ -185,7 +203,10 @@ def main():
         print("No xlsx files found.")
         return
 
+    # Load and split orders, tracking stats per file
     orders = []
+    original_count = 0
+    file_stats = {}
     for f in files:
         category = os.path.splitext(os.path.basename(f))[0]
         max_qty = CATEGORY_MAX_QTY.get(category)
@@ -194,13 +215,22 @@ def main():
         for o in file_orders:
             o['max_qty'] = max_qty
             o['category'] = category
-        print(f"Loaded {len(file_orders)} orders from {f} (category: {category}, max qty/item: {max_qty or 'unlimited'})")
-        orders.extend(file_orders)
-    expanded = []
-    for o in orders:
-        expanded.extend(split_order(o, o['max_qty']))
-    orders = expanded
-    print(f"Total: {len(orders)} orders.\n")
+        original_file_count = len(file_orders)
+        original_count += original_file_count
+        expanded_file = []
+        for o in file_orders:
+            expanded_file.extend(split_order(o, o['max_qty']))
+        split_count = len(expanded_file) - original_file_count
+        file_stats[f] = {'category': category, 'original': original_file_count,
+                         'submitted': len(expanded_file), 'split': split_count}
+        print(f"Loaded {original_file_count} orders from {f} (category: {category}, max qty/item: {max_qty or 'unlimited'})")
+        orders.extend(expanded_file)
+    print(f"Total: {len(orders)} submissions ({original_count} orders, {len(orders) - original_count} from splitting).\n")
+
+    # Track results
+    submitted = []
+    failed = []
+    skipped = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -214,15 +244,20 @@ def main():
             address = order['address']
             items = order['items']
             notes = order['notes']
-            max_qty = order['max_qty']
             category = order['category']
 
+            split_part = order.get('split_part')
+            split_total = order.get('split_total')
+
             print(f"\n{'='*60}")
-            print(f"Order {idx + 1}/{len(orders)} [{category}]")
+            header = f"Order {idx + 1}/{len(orders)} [{category}]"
+            if split_part:
+                header += f"  *** SPLIT {split_part}/{split_total} ***"
+            print(header)
             print(f"  Name:    {name}")
             print(f"  Phone:   {phone}")
             print(f"  Address: {address}")
-            print(f"  Items:")
+            print(f"  Items ({sum(q for _, _, q in items)}个):")
             for brand, item_name, qty in items:
                 print(f"    - [{brand}] {item_name}  x{qty}")
             if notes:
@@ -236,6 +271,7 @@ def main():
                     input("Press Enter to SUBMIT this order, Ctrl+C to skip... ")
                 except KeyboardInterrupt:
                     print("\nSkipped.")
+                    skipped.append(order)
                     continue
 
             # Submit via the AJAX button
@@ -244,10 +280,42 @@ def main():
                 page.wait_for_selector('.mask', state='visible', timeout=10000)
                 order_no = page.locator('#successOrderNo').inner_text()
                 print(f"Order {idx + 1} submitted. Order no: {order_no}")
+                submitted.append({**order, 'order_no': order_no})
             except Exception:
                 print(f"Order {idx + 1}: submit response unclear — check browser.")
+                failed.append(order)
 
         browser.close()
+
+    # Print summary report
+    print(f"\n{'='*60}")
+    print("SUMMARY REPORT")
+    print(f"{'='*60}")
+    print(f"\nFiles processed:")
+    for f, stats in file_stats.items():
+        split_note = f" ({stats['split']} split)" if stats['split'] > 0 else ""
+        print(f"  {f} [{stats['category']}]: {stats['original']} orders → {stats['submitted']} submissions{split_note}")
+    print(f"\nTotal original orders: {original_count}")
+    print(f"Total submissions:     {len(orders)} ({len(orders) - original_count} from splitting)")
+    print(f"Submitted:             {len(submitted)}")
+    if failed:
+        print(f"Failed/unclear:        {len(failed)}")
+    if skipped:
+        print(f"Skipped:               {len(skipped)}")
+    if submitted:
+        print(f"\nOrder numbers:")
+        for s in submitted:
+            total_qty = sum(q for _, _, q in s['items'])
+            print(f"  {s['order_no']} — {s['name']} ({total_qty}个)")
+    if failed:
+        print(f"\nFailed orders (check manually):")
+        for f_order in failed:
+            print(f"  {f_order['name']} {f_order['phone']}")
+    if skipped:
+        print(f"\nSkipped orders:")
+        for s_order in skipped:
+            print(f"  {s_order['name']} {s_order['phone']}")
+    print(f"\n{'='*60}")
 
 
 if __name__ == '__main__':

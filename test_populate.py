@@ -6,12 +6,12 @@ import pandas as pd
 from populate import load_orders, split_order, str_cell
 
 
-def make_order(items, max_qty=None, notes=""):
+def make_order(items, notes=""):
     return {
         'name': '王芳', 'phone': '13800000001',
         'address': '广东省深圳市某街道',
         'items': items, 'notes': notes,
-        'max_qty': max_qty, 'category': '零食',
+        'max_qty': None, 'category': '零食',
     }
 
 
@@ -36,87 +36,123 @@ class TestStrCell(unittest.TestCase):
 
 
 class TestSplitOrder(unittest.TestCase):
-    def test_no_split_needed(self):
-        order = make_order([("Swisse", "鱼油", 5)], max_qty=8)
-        result = split_order(order, 8)
+    def test_no_split_under_max(self):
+        order = make_order([("A", "麦片", 5), ("B", "饼干", 3)])
+        result = split_order(order, 15)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]['items'], [("Swisse", "鱼油", 5)])
+        self.assertEqual(result[0]['items'], [("A", "麦片", 5), ("B", "饼干", 3)])
 
     def test_exact_max_no_split(self):
-        order = make_order([("Swisse", "鱼油", 8)], max_qty=8)
+        order = make_order([("A", "麦片", 8)])
         result = split_order(order, 8)
         self.assertEqual(len(result), 1)
 
     def test_no_max_qty_no_split(self):
-        order = make_order([("Swisse", "鱼油", 100)], max_qty=None)
+        order = make_order([("A", "麦片", 100)])
         result = split_order(order, None)
         self.assertEqual(len(result), 1)
 
     def test_single_item_even_split(self):
-        # qty=24, max=15 → 2 orders of 12
-        order = make_order([("Weet-Bix", "儿童麦片", 24)], max_qty=15)
+        # total=24, max=15 → 2 orders of 12
+        order = make_order([("A", "麦片", 24)])
         result = split_order(order, 15)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]['items'], [("Weet-Bix", "儿童麦片", 12)])
-        self.assertEqual(result[1]['items'], [("Weet-Bix", "儿童麦片", 12)])
+        self.assertEqual(result[0]['items'], [("A", "麦片", 12)])
+        self.assertEqual(result[1]['items'], [("A", "麦片", 12)])
 
     def test_single_item_uneven_split(self):
-        # qty=25, max=15 → 2 orders: 13 + 12
-        order = make_order([("Weet-Bix", "儿童麦片", 25)], max_qty=15)
+        # total=25, max=15 → 2 orders: 13 + 12
+        order = make_order([("A", "麦片", 25)])
         result = split_order(order, 15)
         self.assertEqual(len(result), 2)
         qtys = [o['items'][0][2] for o in result]
         self.assertEqual(sum(qtys), 25)
         self.assertLessEqual(max(qtys) - min(qtys), 1)
 
-    def test_single_item_three_way_split(self):
-        # qty=31, max=15 → 3 orders
-        order = make_order([("Brand", "Item", 31)], max_qty=15)
+    def test_three_way_split(self):
+        # total=40, max=15 → 3 orders
+        order = make_order([("A", "麦片", 40)])
         result = split_order(order, 15)
         self.assertEqual(len(result), 3)
-        self.assertEqual(sum(o['items'][0][2] for o in result), 31)
+        total = sum(o['items'][0][2] for o in result)
+        self.assertEqual(total, 40)
         for o in result:
             self.assertLessEqual(o['items'][0][2], 15)
 
-    def test_spread_evenly_all_quantities(self):
-        for qty in range(1, 50):
+    def test_multiple_items_total_exceeds(self):
+        # A(10) + B(8) = 18, max=15 → 2 orders of 9 each
+        order = make_order([("A", "麦片", 10), ("B", "饼干", 8)])
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 2)
+        totals = [sum(q for _, _, q in o['items']) for o in result]
+        self.assertEqual(sum(totals), 18)
+        self.assertLessEqual(max(totals) - min(totals), 1)
+
+    def test_multiple_items_split_distributes_items(self):
+        # A(10) + B(8) + C(6) = 24, max=15 → 2 orders of 12
+        order = make_order([("A", "麦片", 10), ("B", "饼干", 8), ("C", "糖果", 6)])
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 2)
+        totals = [sum(q for _, _, q in o['items']) for o in result]
+        self.assertEqual(totals, [12, 12])
+        # Total per product preserved
+        all_items = {}
+        for o in result:
+            for brand, name, qty in o['items']:
+                all_items[(brand, name)] = all_items.get((brand, name), 0) + qty
+        self.assertEqual(all_items[("A", "麦片")], 10)
+        self.assertEqual(all_items[("B", "饼干")], 8)
+        self.assertEqual(all_items[("C", "糖果")], 6)
+
+    def test_item_can_span_two_orders(self):
+        # A(10) + B(8) = 18, max=15 → B gets split: some in order 1, rest in order 2
+        order = make_order([("A", "麦片", 10), ("B", "饼干", 8)])
+        result = split_order(order, 15)
+        # B should appear in both orders
+        all_items = {}
+        for o in result:
+            for brand, name, qty in o['items']:
+                key = (brand, name)
+                all_items[key] = all_items.get(key, 0) + qty
+        self.assertEqual(all_items[("A", "麦片")], 10)
+        self.assertEqual(all_items[("B", "饼干")], 8)
+
+    def test_each_sub_order_within_max(self):
+        # Exhaustive: various totals and max values
+        for total in range(1, 60):
             for max_qty in [8, 15]:
-                order = make_order([("B", "N", qty)], max_qty=max_qty)
+                order = make_order([("A", "Item", total)])
                 result = split_order(order, max_qty)
-                qtys = [o['items'][0][2] for o in result]
-                self.assertEqual(sum(qtys), qty)
-                self.assertLessEqual(max(qtys) - min(qtys), 1)
+                for o in result:
+                    sub_total = sum(q for _, _, q in o['items'])
+                    self.assertLessEqual(sub_total, max_qty,
+                                         f"total={total}, max={max_qty}: sub-order has {sub_total}")
+                # Total preserved
+                grand_total = sum(sum(q for _, _, q in o['items']) for o in result)
+                self.assertEqual(grand_total, total)
 
-    def test_multiple_items_item_exceeding_goes_to_next_order(self):
-        # Item A qty=24, max=15 → 2 batches [12, 12]
-        # Item B qty=5,  max=15 → 1 batch  [5]
-        # → Order 1: A(12), B(5)  |  Order 2: A(12)
-        order = make_order([("A", "麦片", 24), ("B", "饼干", 5)], max_qty=15)
-        result = split_order(order, 15)
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]['items'], [("A", "麦片", 12), ("B", "饼干", 5)])
-        self.assertEqual(result[1]['items'], [("A", "麦片", 12)])
-
-    def test_multiple_items_both_exceeding(self):
-        # Item A qty=24, max=15 → [12, 12]
-        # Item B qty=30, max=15 → [15, 15]
-        # → 2 orders, each with both items
-        order = make_order([("A", "麦片", 24), ("B", "饼干", 30)], max_qty=15)
-        result = split_order(order, 15)
-        self.assertEqual(len(result), 2)
-        self.assertEqual(len(result[0]['items']), 2)
-        self.assertEqual(len(result[1]['items']), 2)
-        total_a = sum(o['items'][0][2] for o in result)
-        total_b = sum(o['items'][1][2] for o in result)
-        self.assertEqual(total_a, 24)
-        self.assertEqual(total_b, 30)
+    def test_sub_orders_spread_evenly(self):
+        for total in range(1, 50):
+            for max_qty in [8, 15]:
+                order = make_order([("A", "Item", total)])
+                result = split_order(order, max_qty)
+                totals = [sum(q for _, _, q in o['items']) for o in result]
+                if len(totals) > 1:
+                    self.assertLessEqual(max(totals) - min(totals), 1,
+                                         f"total={total}, max={max_qty}: uneven split {totals}")
 
     def test_preserves_order_metadata(self):
-        order = make_order([("A", "麦片", 24)], max_qty=15, notes="请轻放")
+        order = make_order([("A", "麦片", 24)], notes="请轻放")
         result = split_order(order, 15)
         for o in result:
             self.assertEqual(o['name'], '王芳')
             self.assertEqual(o['notes'], '请轻放')
+
+    def test_no_items_below_max(self):
+        # All items fit, no split
+        order = make_order([("A", "麦片", 3), ("B", "饼干", 2), ("C", "糖", 1)])
+        result = split_order(order, 15)
+        self.assertEqual(len(result), 1)
 
 
 class TestLoadOrders(unittest.TestCase):
