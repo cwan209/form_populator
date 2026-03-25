@@ -25,6 +25,7 @@ SERVICE_LINE_VALUES = {
 CATEGORY_MAX_QTY = {
     "保健品": 8,
     "零食": 15,
+    "奶粉": 3,
 }
 
 # Override service line per category (keyed by filename stem)
