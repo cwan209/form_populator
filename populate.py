@@ -174,7 +174,7 @@ def fill_order(page, name, phone, address, items, notes, category=None):
 
 
 def load_orders(df):
-    """Group Sheet3 rows by person into a list of order dicts."""
+    """Group 录单表 rows by person into a list of order dicts."""
     orders = []
     for key, group in df.groupby(['联系人（务必实名）', '联系电话'], sort=False):
         first = group.iloc[0]
@@ -211,7 +211,7 @@ def main():
     for f in files:
         category = os.path.splitext(os.path.basename(f))[0]
         max_qty = CATEGORY_MAX_QTY.get(category)
-        df = pd.read_excel(f, sheet_name='Sheet3')
+        df = pd.read_excel(f, sheet_name='录单表')
         file_orders = load_orders(df)
         for o in file_orders:
             o['max_qty'] = max_qty
