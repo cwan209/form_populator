@@ -139,9 +139,9 @@ def fill_order(page, name, phone, address, items, notes, category=None):
         print("Session expired — log in again in the browser, then press Enter...")
         input()
 
-    # 1. Fill address into smart address textarea and trigger geocoding
-    page.locator('#address_content').fill(address)
-    page.locator('input[onclick="readAddressContent()"]').click()
+    # 1. Fill address into 详细地址 field and click 确认 to trigger geocoding
+    page.locator('#recieverAddDetail').fill(address)
+    page.locator('input[onclick="analys(this)"]').click()
     try:
         page.wait_for_function("document.getElementById('shi').value !== ''", timeout=8000)
     except Exception:
