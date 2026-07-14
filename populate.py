@@ -177,20 +177,20 @@ def fill_order(page, name, phone, address, items, notes, category=None):
 
 
 def load_orders(df):
-    """Group 录单表 rows by person into a list of order dicts."""
+    """Group 团购发货单 rows by person into a list of order dicts."""
     orders = []
-    for key, group in df.groupby(['联系人（务必实名）', '联系电话'], sort=False):
+    for key, group in df.groupby(['收件人姓名', '电话'], sort=False):
         first = group.iloc[0]
-        name = str_cell(first.get('联系人（务必实名）', ''))
-        phone = str_cell(first.get('联系电话', ''))
-        address = str_cell(first.get('地址', ''))
+        name = str_cell(first.get('收件人姓名', ''))
+        phone = str_cell(first.get('电话', ''))
+        address = str_cell(first.get('收货地址', ''))
         notes = str_cell(first.get('备注', ''))
 
         items = []
         for _, row in group.iterrows():
-            brand = str_cell(row.get('品牌名字', ''))
-            item_name = str_cell(row.get('产品名字', ''))
-            qty_raw = row.get('数量', 1)
+            brand = str_cell(row.get('快递品牌', ''))
+            item_name = str_cell(row.get('快递名称', ''))
+            qty_raw = row.get('快递系数', 1)
             qty = int(qty_raw) if not pd.isna(qty_raw) else 1
             if item_name:
                 items.append((brand, item_name, qty))
@@ -214,7 +214,7 @@ def main():
     for f in files:
         category = os.path.splitext(os.path.basename(f))[0]
         max_qty = CATEGORY_MAX_QTY.get(category)
-        df = pd.read_excel(f, sheet_name='录单表')
+        df = pd.read_excel(f, sheet_name='团购发货单')
         file_orders = load_orders(df)
         for o in file_orders:
             o['max_qty'] = max_qty
