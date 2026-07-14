@@ -41,16 +41,16 @@ If `CONFIRM_EACH_ORDER=true` is set in `.env`, the script will pause after filli
 
 ## Input format
 
-Place xlsx files in the `input/` folder. Each file's name determines its category (e.g. `零食.xlsx`, `保健品.xlsx`). Files are read from **录单表**; each row is one product line item, grouped by `联系人（务必实名）` + `联系电话` into a single order.
+Place xlsx files in the `input/` folder. Each file's name determines its category (e.g. `零食.xlsx`, `保健品.xlsx`). Files are read from **团购发货单**; each row is one product line item, grouped by `收件人姓名` + `电话` into a single order.
 
 | Column | Used for |
 |---|---|
-| `联系人（务必实名）` | Recipient name |
-| `联系电话` | Recipient phone |
-| `地址` | Recipient address |
-| `品牌名字` | Item brand |
-| `产品名字` | Item name |
-| `数量` | Item quantity |
+| `收件人姓名` | Recipient name |
+| `电话` | Recipient phone |
+| `收货地址` | Recipient address |
+| `快递品牌` | Item brand |
+| `快递名称` | Item name |
+| `快递系数` | Item quantity |
 | `备注` | Notes (optional) |
 
 If an order's total quantity exceeds the category maximum, the order is automatically split into multiple separate submissions with quantities spread evenly.
@@ -79,7 +79,7 @@ Category is determined by the xlsx filename stem:
 
 ## Step-by-step guide
 
-1. **Prepare your xlsx files.** Each file should be named after its category (e.g. `零食.xlsx`, `保健品.xlsx`, `奶粉.xlsx`). Each file must have a sheet named **录单表** with the columns listed above.
+1. **Prepare your xlsx files.** Each file should be named after its category (e.g. `零食.xlsx`, `保健品.xlsx`, `奶粉.xlsx`). Each file must have a sheet named **团购发货单** with the columns listed above.
 
 2. **Drop the files into the `input/` folder.**
    ```
