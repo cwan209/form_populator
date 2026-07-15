@@ -193,7 +193,7 @@ def load_orders(df):
         for _, row in group.iterrows():
             brand = str_cell(row.get('快递品牌', ''))
             item_name = str_cell(row.get('快递名称', ''))
-            qty_raw = row.get('快递系数', 1)
+            qty_raw = row.get('快递数量', 1)
             qty = int(qty_raw) if not pd.isna(qty_raw) else 1
             if item_name:
                 items.append((brand, item_name, qty))
