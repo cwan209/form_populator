@@ -179,7 +179,10 @@ def fill_order(page, name, phone, address, items, notes, category=None):
 def load_orders(df):
     """Group 团购发货单 rows by person into a list of order dicts."""
     orders = []
-    for key, group in df.groupby(['收件人姓名', '电话'], sort=False):
+    # Include address in the key: same person may ship to multiple addresses.
+    # fillna('') so rows with a blank address aren't dropped by groupby.
+    address_key = df.get('收货地址', pd.Series('', index=df.index)).fillna('')
+    for key, group in df.groupby(['收件人姓名', '电话', address_key], sort=False):
         first = group.iloc[0]
         name = str_cell(first.get('收件人姓名', ''))
         phone = str_cell(first.get('电话', ''))
