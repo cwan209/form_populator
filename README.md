@@ -50,7 +50,7 @@ Place xlsx files in the `input/` folder. Each file's name determines its categor
 | `收货地址` | Recipient address |
 | `快递品牌` | Item brand |
 | `快递名称` | Item name |
-| `快递系数` | Item quantity |
+| `快递数量` | Item quantity |
 | `备注` | Notes (optional) |
 
 If an order's total quantity exceeds the category maximum, the order is automatically split into multiple separate submissions with quantities spread evenly.
