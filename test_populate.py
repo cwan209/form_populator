@@ -200,6 +200,26 @@ class TestLoadOrders(unittest.TestCase):
         self.assertEqual(len(orders[0]['items']), 1)
         self.assertEqual(orders[0]['items'][0][1], "原味饼干")
 
+    def test_same_person_different_address_splits_orders(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递系数": 3, "备注": ""},
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "上海市浦东某路", "快递品牌": "TimTam", "快递名称": "原味饼干", "快递系数": 2, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0]['address'], "广东省深圳市某街道")
+        self.assertEqual(orders[0]['items'], [("Weet-Bix", "儿童麦片", 3)])
+        self.assertEqual(orders[1]['address'], "上海市浦东某路")
+        self.assertEqual(orders[1]['items'], [("TimTam", "原味饼干", 2)])
+
+    def test_missing_address_rows_still_loaded(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": float("nan"), "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递系数": 1, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]['address'], "")
+
     def test_qty_defaults_to_1_when_nan(self):
         df = self._make_df([
             {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递系数": float("nan"), "备注": ""},
