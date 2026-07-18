@@ -41,6 +41,15 @@ def str_cell(val):
     return str(val).strip()
 
 
+def str_id(val):
+    """Like str_cell, but renders integral floats (Excel numeric cells) without '.0'."""
+    if pd.isna(val):
+        return ''
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val).strip()
+
+
 def is_login_page(page):
     return page.query_selector('#j_username') is not None
 
@@ -176,9 +185,20 @@ def fill_order(page, name, phone, address, items, notes, category=None):
     page.locator('#commentRemark').fill(note_text)
 
 
+def find_order_no_column(df):
+    """Find the 蘑菇订单号 column: exact name first, else any column containing 订单号."""
+    if '蘑菇订单号' in df.columns:
+        return '蘑菇订单号'
+    for col in df.columns:
+        if '订单号' in str(col):
+            return col
+    return None
+
+
 def load_orders(df):
     """Group 团购发货单 rows by person into a list of order dicts."""
     orders = []
+    order_no_col = find_order_no_column(df)
     # Include address in the key: same person may ship to multiple addresses.
     # fillna('') so rows with a blank address aren't dropped by groupby.
     address_key = df.get('收货地址', pd.Series('', index=df.index)).fillna('')
@@ -188,6 +208,13 @@ def load_orders(df):
         phone = str_cell(first.get('电话', ''))
         address = str_cell(first.get('收货地址', ''))
         notes = str_cell(first.get('备注', ''))
+
+        mogu_order_nos = []
+        if order_no_col:
+            for val in group[order_no_col]:
+                no = str_id(val)
+                if no and no not in mogu_order_nos:
+                    mogu_order_nos.append(no)
 
         items = []
         for _, row in group.iterrows():
@@ -200,8 +227,41 @@ def load_orders(df):
 
         if name or phone:
             orders.append({'name': name, 'phone': phone, 'address': address,
-                           'items': items, 'notes': notes})
+                           'items': items, 'notes': notes,
+                           'mogu_order_nos': mogu_order_nos})
     return orders
+
+
+RESULTS_SHEET = '下单结果'
+RESULT_COLUMNS = ['蘑菇订单号', '收件人', '收件人电话', '地址', 'EWE订单号']
+
+
+def build_results(original_orders, submitted):
+    """Build 下单结果 rows: one row per 蘑菇订单号, EWE order numbers comma-joined.
+
+    Split sub-orders share their original order's order_key, so all their EWE
+    numbers land in one cell. Orders that never got an EWE number get an
+    empty cell (failed/skipped).
+    """
+    ewe_by_key = {}
+    for s in submitted:
+        ewe_by_key.setdefault(s['order_key'], []).append(s['order_no'])
+
+    rows = []
+    for o in original_orders:
+        ewe = ', '.join(ewe_by_key.get(o['order_key'], []))
+        for mogu_no in (o.get('mogu_order_nos') or ['']):
+            rows.append({'蘑菇订单号': mogu_no, '收件人': o['name'],
+                         '收件人电话': o['phone'], '地址': o['address'],
+                         'EWE订单号': ewe})
+    return rows
+
+
+def write_results(path, rows):
+    """Write result rows into the source xlsx as sheet 下单结果 (replaced if it exists)."""
+    df = pd.DataFrame(rows, columns=RESULT_COLUMNS)
+    with pd.ExcelWriter(path, mode='a', engine='openpyxl', if_sheet_exists='replace') as writer:
+        df.to_excel(writer, sheet_name=RESULTS_SHEET, index=False)
 
 
 def main():
@@ -214,14 +274,17 @@ def main():
     orders = []
     original_count = 0
     file_stats = {}
+    originals_by_file = {}
     for f in files:
         category = os.path.splitext(os.path.basename(f))[0]
         max_qty = CATEGORY_MAX_QTY.get(category)
         df = pd.read_excel(f, sheet_name='团购发货单')
         file_orders = load_orders(df)
-        for o in file_orders:
+        for i, o in enumerate(file_orders):
             o['max_qty'] = max_qty
             o['category'] = category
+            o['order_key'] = (f, i)
+        originals_by_file[f] = file_orders
         original_file_count = len(file_orders)
         original_count += original_file_count
         expanded_file = []
@@ -239,60 +302,72 @@ def main():
     failed = []
     skipped = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False)
+            page = browser.new_page()
 
-        login(page)
+            login(page)
 
-        for idx, order in enumerate(orders):
-            name = order['name']
-            phone = order['phone']
-            address = order['address']
-            items = order['items']
-            notes = order['notes']
-            category = order['category']
+            for idx, order in enumerate(orders):
+                name = order['name']
+                phone = order['phone']
+                address = order['address']
+                items = order['items']
+                notes = order['notes']
+                category = order['category']
 
-            split_part = order.get('split_part')
-            split_total = order.get('split_total')
+                split_part = order.get('split_part')
+                split_total = order.get('split_total')
 
-            print(f"\n{'='*60}")
-            header = f"Order {idx + 1}/{len(orders)} [{category}]"
-            if split_part:
-                header += f"  *** SPLIT {split_part}/{split_total} ***"
-            print(header)
-            print(f"  Name:    {name}")
-            print(f"  Phone:   {phone}")
-            print(f"  Address: {address}")
-            print(f"  Items ({sum(q for _, _, q in items)}个):")
-            for brand, item_name, qty in items:
-                print(f"    - [{brand}] {item_name}  x{qty}")
-            if notes:
-                print(f"  Notes:   {notes}")
-            print(f"{'='*60}")
+                print(f"\n{'='*60}")
+                header = f"Order {idx + 1}/{len(orders)} [{category}]"
+                if split_part:
+                    header += f"  *** SPLIT {split_part}/{split_total} ***"
+                print(header)
+                print(f"  Name:    {name}")
+                print(f"  Phone:   {phone}")
+                print(f"  Address: {address}")
+                print(f"  Items ({sum(q for _, _, q in items)}个):")
+                for brand, item_name, qty in items:
+                    print(f"    - [{brand}] {item_name}  x{qty}")
+                if notes:
+                    print(f"  Notes:   {notes}")
+                print(f"{'='*60}")
 
-            fill_order(page, name, phone, address, items, notes, category)
+                fill_order(page, name, phone, address, items, notes, category)
 
-            if CONFIRM_EACH_ORDER:
+                if CONFIRM_EACH_ORDER:
+                    try:
+                        input("Press Enter to SUBMIT this order, Ctrl+C to skip... ")
+                    except KeyboardInterrupt:
+                        print("\nSkipped.")
+                        skipped.append(order)
+                        continue
+
+                # Submit via the AJAX button
+                page.locator('#ajaxScuuceeBtn').click()
                 try:
-                    input("Press Enter to SUBMIT this order, Ctrl+C to skip... ")
-                except KeyboardInterrupt:
-                    print("\nSkipped.")
-                    skipped.append(order)
-                    continue
+                    page.wait_for_selector('.mask', state='visible', timeout=10000)
+                    order_no = page.locator('#successOrderNo').inner_text()
+                    print(f"Order {idx + 1} submitted. Order no: {order_no}")
+                    submitted.append({**order, 'order_no': order_no})
+                except Exception:
+                    print(f"Order {idx + 1}: submit response unclear — check browser.")
+                    failed.append(order)
 
-            # Submit via the AJAX button
-            page.locator('#ajaxScuuceeBtn').click()
+            browser.close()
+    finally:
+        # Write results back into each source xlsx as a new sheet, even if the
+        # run was interrupted — whatever was submitted so far is recorded.
+        print(f"\nWriting results back to xlsx (sheet: {RESULTS_SHEET})...")
+        for f, file_orders in originals_by_file.items():
+            rows = build_results(file_orders, submitted)
             try:
-                page.wait_for_selector('.mask', state='visible', timeout=10000)
-                order_no = page.locator('#successOrderNo').inner_text()
-                print(f"Order {idx + 1} submitted. Order no: {order_no}")
-                submitted.append({**order, 'order_no': order_no})
-            except Exception:
-                print(f"Order {idx + 1}: submit response unclear — check browser.")
-                failed.append(order)
-
-        browser.close()
+                write_results(f, rows)
+                print(f"  {f}: {len(rows)} rows written")
+            except Exception as e:
+                print(f"  {f}: FAILED to write results — {e}")
 
     # Print summary report
     print(f"\n{'='*60}")
