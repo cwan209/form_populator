@@ -3,7 +3,9 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from populate import load_orders, split_order, str_cell
+from populate import (RESULTS_SHEET, build_results, find_order_no_column,
+                      load_orders, split_order, str_cell, str_id,
+                      write_results)
 
 
 def make_order(items, notes=""):
@@ -226,6 +228,119 @@ class TestLoadOrders(unittest.TestCase):
         ])
         orders = load_orders(df)
         self.assertEqual(orders[0]['items'][0][2], 1)
+
+    def test_mogu_order_no_collected_and_deduped(self):
+        df = self._make_df([
+            {"蘑菇订单号": "MG001", "收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 3, "备注": ""},
+            {"蘑菇订单号": "MG001", "收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "TimTam", "快递名称": "原味饼干", "快递数量": 2, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['mogu_order_nos'], ["MG001"])
+
+    def test_mogu_order_no_numeric_cell_has_no_decimal(self):
+        df = self._make_df([
+            {"蘑菇订单号": 20260718001.0, "收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 1, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['mogu_order_nos'], ["20260718001"])
+
+    def test_no_order_no_column_gives_empty_list(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 1, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['mogu_order_nos'], [])
+
+
+class TestStrId(unittest.TestCase):
+    def test_integral_float(self):
+        self.assertEqual(str_id(123.0), "123")
+
+    def test_string_passthrough(self):
+        self.assertEqual(str_id(" MG001 "), "MG001")
+
+    def test_nan(self):
+        self.assertEqual(str_id(float("nan")), "")
+
+
+class TestFindOrderNoColumn(unittest.TestCase):
+    def test_exact_match(self):
+        df = pd.DataFrame(columns=["订单号", "蘑菇订单号", "收件人姓名"])
+        self.assertEqual(find_order_no_column(df), "蘑菇订单号")
+
+    def test_fallback_contains(self):
+        df = pd.DataFrame(columns=["平台订单号", "收件人姓名"])
+        self.assertEqual(find_order_no_column(df), "平台订单号")
+
+    def test_none_when_absent(self):
+        df = pd.DataFrame(columns=["收件人姓名", "电话"])
+        self.assertIsNone(find_order_no_column(df))
+
+
+def make_original(order_key, mogu_nos, name="王芳", phone="13800000001", address="广东省深圳市某街道"):
+    return {'name': name, 'phone': phone, 'address': address, 'items': [],
+            'notes': '', 'mogu_order_nos': mogu_nos, 'order_key': order_key}
+
+
+class TestBuildResults(unittest.TestCase):
+    def test_split_order_joins_ewe_numbers(self):
+        originals = [make_original(("f", 0), ["MG001"])]
+        submitted = [{**originals[0], 'order_no': "EWE001"},
+                     {**originals[0], 'order_no': "EWE002"}]
+        rows = build_results(originals, submitted)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['蘑菇订单号'], "MG001")
+        self.assertEqual(rows[0]['EWE订单号'], "EWE001, EWE002")
+        self.assertEqual(rows[0]['收件人'], "王芳")
+        self.assertEqual(rows[0]['收件人电话'], "13800000001")
+        self.assertEqual(rows[0]['地址'], "广东省深圳市某街道")
+
+    def test_failed_order_gets_empty_ewe_cell(self):
+        originals = [make_original(("f", 0), ["MG001"]),
+                     make_original(("f", 1), ["MG002"], name="李明")]
+        submitted = [{**originals[0], 'order_no': "EWE001"}]
+        rows = build_results(originals, submitted)
+        self.assertEqual(rows[0]['EWE订单号'], "EWE001")
+        self.assertEqual(rows[1]['EWE订单号'], "")
+
+    def test_group_with_multiple_mogu_orders_gets_row_each(self):
+        originals = [make_original(("f", 0), ["MG001", "MG002"])]
+        submitted = [{**originals[0], 'order_no': "EWE001"}]
+        rows = build_results(originals, submitted)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r['蘑菇订单号'] for r in rows], ["MG001", "MG002"])
+        self.assertEqual(rows[0]['EWE订单号'], "EWE001")
+        self.assertEqual(rows[1]['EWE订单号'], "EWE001")
+
+    def test_missing_mogu_no_still_writes_row(self):
+        originals = [make_original(("f", 0), [])]
+        rows = build_results(originals, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['蘑菇订单号'], "")
+
+
+class TestWriteResults(unittest.TestCase):
+    def test_appends_sheet_preserving_original(self):
+        import os
+        import tempfile
+
+        src = pd.DataFrame([{"收件人姓名": "王芳", "电话": "13800000001"}])
+        rows = build_results([make_original(("f", 0), ["MG001"])],
+                             [{**make_original(("f", 0), ["MG001"]), 'order_no': "EWE001"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "订单.xlsx")
+            src.to_excel(path, sheet_name='团购发货单', index=False)
+            write_results(path, rows)
+            # Overwriting an existing 下单结果 sheet must also work
+            write_results(path, rows)
+
+            original = pd.read_excel(path, sheet_name='团购发货单')
+            self.assertEqual(original.iloc[0]['收件人姓名'], "王芳")
+            result = pd.read_excel(path, sheet_name=RESULTS_SHEET)
+            self.assertEqual(list(result.columns),
+                             ['蘑菇订单号', '收件人', '收件人电话', '地址', 'EWE订单号'])
+            self.assertEqual(result.iloc[0]['蘑菇订单号'], "MG001")
+            self.assertEqual(result.iloc[0]['EWE订单号'], "EWE001")
 
 
 if __name__ == '__main__':

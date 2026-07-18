@@ -36,6 +36,7 @@ The script will:
 2. Auto-fill your username and password, then pause for you to solve the image CAPTCHA
 3. After login, all orders are filled and submitted automatically — no further interaction needed
 4. Each order preview is printed to the terminal as it is processed
+5. When done, the EWE order numbers are written back into each source xlsx as a new sheet (see [Results write-back](#results-write-back))
 
 If `CONFIRM_EACH_ORDER=true` is set in `.env`, the script will pause after filling each form so you can review it in the browser before submitting.
 
@@ -52,8 +53,23 @@ Place xlsx files in the `input/` folder. Each file's name determines its categor
 | `快递名称` | Item name |
 | `快递数量` | Item quantity |
 | `备注` | Notes (optional) |
+| `蘑菇订单号` | Platform order number, echoed into the results sheet (optional; any column containing `订单号` is used as fallback) |
 
 If an order's total quantity exceeds the category maximum, the order is automatically split into multiple separate submissions with quantities spread evenly.
+
+## Results write-back
+
+After the run (including an interrupted run — whatever was submitted so far is recorded), each source xlsx gets a new sheet named **下单结果** with one row per 蘑菇订单号:
+
+| Column | Content |
+|---|---|
+| `蘑菇订单号` | Platform order number from the input sheet |
+| `收件人` | Recipient name |
+| `收件人电话` | Recipient phone |
+| `地址` | Recipient address |
+| `EWE订单号` | EWE order number(s); comma-separated if the order was split into multiple submissions, empty if submission failed |
+
+The sheet is replaced on each run; all other sheets in the file are left untouched. **Close the xlsx file in Excel before running**, otherwise the write-back will fail (the failure is reported in the terminal and the order numbers are still printed in the summary).
 
 ## Configuration
 
