@@ -140,7 +140,17 @@ def split_order(order, max_qty):
     return sub_orders
 
 
-def fill_order(page, name, phone, address, items, notes, category=None):
+def build_note_text(items, notes, seller_notes=''):
+    """Compose the EWE 备注 text: total quantity, then buyer notes, then 卖家备注."""
+    total_qty = sum(qty for _, _, qty in items)
+    note_text = f"{total_qty}个"
+    for extra in (notes, seller_notes):
+        if extra:
+            note_text += f"\n\n{extra}"
+    return note_text
+
+
+def fill_order(page, name, phone, address, items, notes, category=None, seller_notes=''):
     # Navigate to fresh form
     page.goto(EWE_URL)
     page.wait_for_load_state('networkidle')
@@ -177,12 +187,8 @@ def fill_order(page, name, phone, address, items, notes, category=None):
     radio_value = SERVICE_LINE_VALUES.get(service_line, "ecnGoods")
     page.locator(f'input[name="serviceProduction"][value="{radio_value}"]').check()
 
-    # Fill notes: total quantity, then actual note on a new line if present
-    total_qty = sum(qty for _, _, qty in items)
-    note_text = f"{total_qty}个"
-    if notes:
-        note_text += f"\n\n{notes}"
-    page.locator('#commentRemark').fill(note_text)
+    # Fill notes: total quantity, then buyer notes, then 卖家备注
+    page.locator('#commentRemark').fill(build_note_text(items, notes, seller_notes))
 
 
 def find_order_no_column(df):
@@ -217,6 +223,7 @@ def load_orders(df):
                     mogu_order_nos.append(no)
 
         items = []
+        seller_notes = []
         for _, row in group.iterrows():
             brand = str_cell(row.get('快递品牌', ''))
             item_name = str_cell(row.get('快递名称', ''))
@@ -224,10 +231,14 @@ def load_orders(df):
             qty = int(qty_raw) if not pd.isna(qty_raw) else 1
             if item_name:
                 items.append((brand, item_name, qty))
+            sn = str_cell(row.get('卖家备注', ''))
+            if sn and sn not in seller_notes:
+                seller_notes.append(sn)
 
         if name or phone:
             orders.append({'name': name, 'phone': phone, 'address': address,
                            'items': items, 'notes': notes,
+                           'seller_notes': '\n'.join(seller_notes),
                            'mogu_order_nos': mogu_order_nos})
     return orders
 
@@ -315,6 +326,7 @@ def main():
                 address = order['address']
                 items = order['items']
                 notes = order['notes']
+                seller_notes = order.get('seller_notes', '')
                 category = order['category']
 
                 split_part = order.get('split_part')
@@ -333,9 +345,12 @@ def main():
                     print(f"    - [{brand}] {item_name}  x{qty}")
                 if notes:
                     print(f"  Notes:   {notes}")
+                if seller_notes:
+                    print(f"  卖家备注: {seller_notes}")
                 print(f"{'='*60}")
 
-                fill_order(page, name, phone, address, items, notes, category)
+                fill_order(page, name, phone, address, items, notes, category,
+                           seller_notes=seller_notes)
 
                 if CONFIRM_EACH_ORDER:
                     try:

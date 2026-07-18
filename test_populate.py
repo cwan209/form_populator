@@ -3,9 +3,9 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from populate import (RESULTS_SHEET, build_results, find_order_no_column,
-                      load_orders, split_order, str_cell, str_id,
-                      write_results)
+from populate import (RESULTS_SHEET, build_note_text, build_results,
+                      find_order_no_column, load_orders, split_order,
+                      str_cell, str_id, write_results)
 
 
 def make_order(items, notes=""):
@@ -250,6 +250,46 @@ class TestLoadOrders(unittest.TestCase):
         ])
         orders = load_orders(df)
         self.assertEqual(orders[0]['mogu_order_nos'], [])
+
+    def test_seller_notes_collected_and_deduped(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 1, "备注": "", "卖家备注": "尽快发货"},
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "TimTam", "快递名称": "原味饼干", "快递数量": 2, "备注": "", "卖家备注": "尽快发货"},
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Swisse", "快递名称": "鱼油", "快递数量": 1, "备注": "", "卖家备注": "拆两箱"},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['seller_notes'], "尽快发货\n拆两箱")
+
+    def test_missing_seller_notes_column_gives_empty_string(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 1, "备注": ""},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['seller_notes'], "")
+
+    def test_nan_seller_notes_gives_empty_string(self):
+        df = self._make_df([
+            {"收件人姓名": "王芳", "电话": "13800000001", "收货地址": "广东省深圳市某街道", "快递品牌": "Weet-Bix", "快递名称": "儿童麦片", "快递数量": 1, "备注": "", "卖家备注": float("nan")},
+        ])
+        orders = load_orders(df)
+        self.assertEqual(orders[0]['seller_notes'], "")
+
+
+class TestBuildNoteText(unittest.TestCase):
+    ITEMS = [("A", "麦片", 3), ("B", "饼干", 2)]
+
+    def test_qty_only(self):
+        self.assertEqual(build_note_text(self.ITEMS, ""), "5个")
+
+    def test_with_notes(self):
+        self.assertEqual(build_note_text(self.ITEMS, "请轻放"), "5个\n\n请轻放")
+
+    def test_with_seller_notes_only(self):
+        self.assertEqual(build_note_text(self.ITEMS, "", "尽快发货"), "5个\n\n尽快发货")
+
+    def test_with_both_notes(self):
+        self.assertEqual(build_note_text(self.ITEMS, "请轻放", "尽快发货"),
+                         "5个\n\n请轻放\n\n尽快发货")
 
 
 class TestStrId(unittest.TestCase):

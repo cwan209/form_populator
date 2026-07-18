@@ -53,7 +53,10 @@ Place xlsx files in the `input/` folder. Each file's name determines its categor
 | `快递名称` | Item name |
 | `快递数量` | Item quantity |
 | `备注` | Notes (optional) |
+| `卖家备注` | Seller notes, appended to the EWE order 备注 field (optional) |
 | `蘑菇订单号` | Platform order number, echoed into the results sheet (optional; any column containing `订单号` is used as fallback) |
+
+The EWE order 备注 field is filled with the total quantity (e.g. `5个`), followed by `备注` and `卖家备注` on separate lines when present.
 
 If an order's total quantity exceeds the category maximum, the order is automatically split into multiple separate submissions with quantities spread evenly.
 
